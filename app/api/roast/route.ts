@@ -1,19 +1,17 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { embedText } from "@/lib/embed";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 export async function POST(req: NextRequest) {
   const { code, category } = await req.json();
 
-  // Embed incoming code for RAG lookup — optional, skip gracefully if it fails
+  // Fetch similar past roasts via trigram similarity (no embedding API needed)
   let fewShotBlock = "";
   try {
-    const queryEmbedding = await embedText(code);
-    const { data: examples } = await supabase.rpc("match_roasts", {
-      query_embedding: queryEmbedding,
+    const { data: examples } = await supabase.rpc("match_roasts_trgm", {
+      query_code: code,
       match_category: category,
       match_count: 3,
     });
@@ -28,7 +26,7 @@ export async function POST(req: NextRequest) {
           .join("\n");
     }
   } catch (e) {
-    console.warn("Embedding skipped:", (e as Error).message);
+    console.warn("RAG lookup skipped:", (e as Error).message);
   }
 
   const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
@@ -52,22 +50,13 @@ Be mean, be funny, be brief. No markdown headers. No bullet points. Just the roa
     const result = await model.generateContent(prompt);
     const roast = result.response.text();
 
-    // Save roast then backfill its embedding async (don't block the response)
     const { data, error } = await supabase
       .from("roasts")
       .insert({ code, category, roast })
       .select()
       .single();
 
-    if (error) {
-      console.error("Supabase insert error:", error);
-    } else if (data?.id) {
-      embedText(`${code}\n\n${roast}`)
-        .then((embedding) =>
-          supabase.from("roasts").update({ embedding }).eq("id", data.id)
-        )
-        .catch(() => {});
-    }
+    if (error) console.error("Supabase error:", error);
 
     return NextResponse.json({ roast, id: data?.id });
   } catch (e: unknown) {
