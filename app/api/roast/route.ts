@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     console.warn("Embedding skipped:", (e as Error).message);
   }
 
-  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+  const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
 
   const prompt = `You are a savage senior developer who has seen too much bad code. You roast brutally but fast — no essays, no headers, no bullet points.
 
