@@ -8,26 +8,28 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 export async function POST(req: NextRequest) {
   const { code, category } = await req.json();
 
-  // Embed incoming code for RAG lookup
-  const queryEmbedding = await embedText(code);
-
-  // Fetch similar past roasts in the same category
-  const { data: examples } = await supabase.rpc("match_roasts", {
-    query_embedding: queryEmbedding,
-    match_category: category,
-    match_count: 3,
-  });
-
-  const fewShotBlock =
-    examples && examples.length > 0
-      ? `\nHere are some previous roasts you made in this category — match this tone and style:\n` +
+  // Embed incoming code for RAG lookup — optional, skip gracefully if it fails
+  let fewShotBlock = "";
+  try {
+    const queryEmbedding = await embedText(code);
+    const { data: examples } = await supabase.rpc("match_roasts", {
+      query_embedding: queryEmbedding,
+      match_category: category,
+      match_count: 3,
+    });
+    if (examples && examples.length > 0) {
+      fewShotBlock =
+        `\nHere are some previous roasts you made in this category — match this tone and style:\n` +
         examples
           .map(
             (ex: { code: string; roast: string }, i: number) =>
               `--- Example ${i + 1} ---\nCode:\n\`\`\`\n${ex.code.slice(0, 300)}\n\`\`\`\nRoast: ${ex.roast}\n`
           )
-          .join("\n")
-      : "";
+          .join("\n");
+    }
+  } catch (e) {
+    console.warn("Embedding skipped:", (e as Error).message);
+  }
 
   const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
@@ -60,15 +62,11 @@ Be mean, be funny, be brief. No markdown headers. No bullet points. Just the roa
     if (error) {
       console.error("Supabase insert error:", error);
     } else if (data?.id) {
-      // Embed the roast text for future RAG lookups, fire-and-forget
       embedText(`${code}\n\n${roast}`)
         .then((embedding) =>
-          supabase
-            .from("roasts")
-            .update({ embedding })
-            .eq("id", data.id)
+          supabase.from("roasts").update({ embedding }).eq("id", data.id)
         )
-        .catch((e) => console.error("Embedding backfill failed:", e));
+        .catch(() => {});
     }
 
     return NextResponse.json({ roast, id: data?.id });
