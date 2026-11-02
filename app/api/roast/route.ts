@@ -29,8 +29,6 @@ export async function POST(req: NextRequest) {
     console.warn("RAG lookup skipped:", (e as Error).message);
   }
 
-  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-preview-05-20" });
-
   const prompt = `You are a savage senior developer who has seen too much bad code. You roast brutally but fast — no essays, no headers, no bullet points.
 
 Keep it short and punchy. Structure it like this:
@@ -46,10 +44,18 @@ ${code}
 
 Be mean, be funny, be brief. No markdown headers. No bullet points. Just the roast, the fix, the verdict.`;
 
+  const models = [
+    "gemini-3.8-flash",
+    "gemini-2.5-flash-preview-05-20",
+    "gemini-2.5-pro",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+  ];
+
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 2000 * attempt));
+  for (const modelName of models) {
     try {
+      const model = genAI.getGenerativeModel({ model: modelName });
       const result = await model.generateContent(prompt);
       const roast = result.response.text();
 
@@ -60,12 +66,14 @@ Be mean, be funny, be brief. No markdown headers. No bullet points. Just the roa
         .single();
 
       if (error) console.error("Supabase error:", error);
-
+      console.log(`Roasted with ${modelName}`);
       return NextResponse.json({ roast, id: data?.id });
     } catch (e: unknown) {
       lastError = e;
       const msg = e instanceof Error ? e.message : "";
-      if (!msg.includes("503")) break; // only retry on overload
+      // only fall through to next model on 503 or 404; hard errors stop here
+      if (!msg.includes("503") && !msg.includes("404")) break;
+      console.warn(`${modelName} failed (${msg.includes("503") ? "503" : "404"}), trying next...`);
     }
   }
 
