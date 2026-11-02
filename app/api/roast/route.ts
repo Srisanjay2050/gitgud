@@ -46,22 +46,29 @@ ${code}
 
 Be mean, be funny, be brief. No markdown headers. No bullet points. Just the roast, the fix, the verdict.`;
 
-  try {
-    const result = await model.generateContent(prompt);
-    const roast = result.response.text();
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 2000 * attempt));
+    try {
+      const result = await model.generateContent(prompt);
+      const roast = result.response.text();
 
-    const { data, error } = await supabase
-      .from("roasts")
-      .insert({ code, category, roast })
-      .select()
-      .single();
+      const { data, error } = await supabase
+        .from("roasts")
+        .insert({ code, category, roast })
+        .select()
+        .single();
 
-    if (error) console.error("Supabase error:", error);
+      if (error) console.error("Supabase error:", error);
 
-    return NextResponse.json({ roast, id: data?.id });
-  } catch (e: unknown) {
-    console.error(e);
-    const msg = e instanceof Error ? e.message : "unknown error";
-    return NextResponse.json({ roast: msg }, { status: 500 });
+      return NextResponse.json({ roast, id: data?.id });
+    } catch (e: unknown) {
+      lastError = e;
+      const msg = e instanceof Error ? e.message : "";
+      if (!msg.includes("503")) break; // only retry on overload
+    }
   }
+
+  const msg = lastError instanceof Error ? lastError.message : "unknown error";
+  return NextResponse.json({ roast: msg }, { status: 500 });
 }
