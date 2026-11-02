@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     console.warn("RAG lookup skipped:", (e as Error).message);
   }
 
-  const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-preview-05-20" });
 
   const prompt = `You are a savage senior developer who has seen too much bad code. You roast brutally but fast — no essays, no headers, no bullet points.
 

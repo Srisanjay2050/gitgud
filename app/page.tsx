@@ -50,9 +50,13 @@ export default function Home() {
         body: JSON.stringify({ code, category }),
       });
       const data = await res.json();
-      setRoast(data.roast);
-      setRoastId(data.id);
-      fetchHistory();
+      if (!res.ok) {
+        setRoast("Gemini is getting destroyed by traffic right now. Try again in 10 seconds.");
+      } else {
+        setRoast(data.roast);
+        setRoastId(data.id);
+        fetchHistory();
+      }
     } catch (e) {
       setRoast("Something broke. Ironic.");
     }
