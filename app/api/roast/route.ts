@@ -44,18 +44,12 @@ ${code}
 
 Be mean, be funny, be brief. No markdown headers. No bullet points. Just the roast, the fix, the verdict.`;
 
-  const models = [
-    "gemini-3.8-flash",
-    "gemini-2.5-flash-preview-05-20",
-    "gemini-2.5-pro",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
-  ];
+  const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
 
   let lastError: unknown;
-  for (const modelName of models) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 5000));
     try {
-      const model = genAI.getGenerativeModel({ model: modelName });
       const result = await model.generateContent(prompt);
       const roast = result.response.text();
 
@@ -66,14 +60,12 @@ Be mean, be funny, be brief. No markdown headers. No bullet points. Just the roa
         .single();
 
       if (error) console.error("Supabase error:", error);
-      console.log(`Roasted with ${modelName}`);
       return NextResponse.json({ roast, id: data?.id });
     } catch (e: unknown) {
       lastError = e;
       const msg = e instanceof Error ? e.message : "";
-      // only fall through to next model on 503 or 404; hard errors stop here
-      if (!msg.includes("503") && !msg.includes("404")) break;
-      console.warn(`${modelName} failed (${msg.includes("503") ? "503" : "404"}), trying next...`);
+      if (!msg.includes("503")) break;
+      console.warn(`attempt ${attempt + 1} 503, retrying...`);
     }
   }
 
