@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const BASE_URL = "https://generativelanguage.googleapis.com/v1/models";
-
-async function callGemini(model: string, prompt: string): Promise<string> {
-  const res = await fetch(`${BASE_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`, {
+async function callGroq(prompt: string): Promise<string> {
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+    },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 512 },
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 512,
     }),
   });
 
@@ -20,7 +21,37 @@ async function callGemini(model: string, prompt: string): Promise<string> {
   }
 
   const json = await res.json();
-  return json.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  return json.choices?.[0]?.message?.content ?? "";
+}
+
+async function callGemini(prompt: string): Promise<string> {
+  const key = process.env.GEMINI_API_KEY;
+  const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.8-flash"];
+
+  for (const model of models) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${key}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 512 },
+        }),
+      }
+    );
+
+    if (res.ok) {
+      const json = await res.json();
+      return json.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    }
+
+    const status = res.status;
+    if (status !== 503 && status !== 404) break;
+    console.warn(`Gemini ${model} failed with ${status}, trying next...`);
+  }
+
+  throw new Error("All Gemini models failed");
 }
 
 export async function POST(req: NextRequest) {
@@ -62,47 +93,28 @@ ${code}
 
 Be mean, be funny, be brief. No markdown headers. No bullet points. Just the roast, the fix, the verdict.`;
 
-  // Try stable v1 models first, fall back to gemini-3.8-flash
-  const models = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-3.8-flash",
-  ];
-
-  let lastError: unknown;
-  for (const modelName of models) {
-    // For gemini-3.8-flash (last resort), retry up to 3x on 503
-    const maxAttempts = modelName === "gemini-3.8-flash" ? 3 : 1;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, 3000));
-      try {
-        const roast = await callGemini(modelName, prompt);
-
-        const { data, error } = await supabase
-          .from("roasts")
-          .insert({ code, category, roast })
-          .select()
-          .single();
-
-        if (error) console.error("Supabase error:", error);
-        console.log(`Roasted with ${modelName}`);
-        return NextResponse.json({ roast, id: data?.id });
-      } catch (e: unknown) {
-        lastError = e;
-        const status = (e as { status?: number }).status;
-        const msg = e instanceof Error ? e.message : "";
-        if (status === 503 || msg.includes("503")) {
-          console.warn(`${modelName} attempt ${attempt + 1} 503, retrying...`);
-          continue;
-        }
-        // 404 or other error — move to next model
-        console.warn(`${modelName} failed (${status ?? "unknown"}), trying next...`);
-        break;
-      }
+  let roast: string;
+  try {
+    // Groq is fast (< 2s) and free — use it first
+    roast = await callGroq(prompt);
+    console.log("Roasted with Groq");
+  } catch (e) {
+    console.warn("Groq failed, falling back to Gemini:", (e as Error).message);
+    try {
+      roast = await callGemini(prompt);
+      console.log("Roasted with Gemini");
+    } catch (e2) {
+      const msg = e2 instanceof Error ? e2.message : "unknown error";
+      return NextResponse.json({ roast: msg }, { status: 500 });
     }
   }
 
-  const msg = lastError instanceof Error ? lastError.message : "unknown error";
-  return NextResponse.json({ roast: msg }, { status: 500 });
+  const { data, error } = await supabase
+    .from("roasts")
+    .insert({ code, category, roast })
+    .select()
+    .single();
+
+  if (error) console.error("Supabase error:", error);
+  return NextResponse.json({ roast, id: data?.id });
 }
