@@ -1,13 +1,31 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
+const BASE_URL = "https://generativelanguage.googleapis.com/v1/models";
+
+async function callGemini(model: string, prompt: string): Promise<string> {
+  const res = await fetch(`${BASE_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 512 },
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw Object.assign(new Error(err), { status: res.status });
+  }
+
+  const json = await res.json();
+  return json.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+}
 
 export async function POST(req: NextRequest) {
   const { code, category } = await req.json();
 
-  // Fetch similar past roasts via trigram similarity (no embedding API needed)
   let fewShotBlock = "";
   try {
     const { data: examples } = await supabase.rpc("match_roasts_trgm", {
@@ -44,28 +62,44 @@ ${code}
 
 Be mean, be funny, be brief. No markdown headers. No bullet points. Just the roast, the fix, the verdict.`;
 
-  const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+  // Try stable v1 models first, fall back to gemini-3.8-flash
+  const models = [
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-3.8-flash",
+  ];
 
   let lastError: unknown;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 5000));
-    try {
-      const result = await model.generateContent(prompt);
-      const roast = result.response.text();
+  for (const modelName of models) {
+    // For gemini-3.8-flash (last resort), retry up to 3x on 503
+    const maxAttempts = modelName === "gemini-3.8-flash" ? 3 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 3000));
+      try {
+        const roast = await callGemini(modelName, prompt);
 
-      const { data, error } = await supabase
-        .from("roasts")
-        .insert({ code, category, roast })
-        .select()
-        .single();
+        const { data, error } = await supabase
+          .from("roasts")
+          .insert({ code, category, roast })
+          .select()
+          .single();
 
-      if (error) console.error("Supabase error:", error);
-      return NextResponse.json({ roast, id: data?.id });
-    } catch (e: unknown) {
-      lastError = e;
-      const msg = e instanceof Error ? e.message : "";
-      if (!msg.includes("503")) break;
-      console.warn(`attempt ${attempt + 1} 503, retrying...`);
+        if (error) console.error("Supabase error:", error);
+        console.log(`Roasted with ${modelName}`);
+        return NextResponse.json({ roast, id: data?.id });
+      } catch (e: unknown) {
+        lastError = e;
+        const status = (e as { status?: number }).status;
+        const msg = e instanceof Error ? e.message : "";
+        if (status === 503 || msg.includes("503")) {
+          console.warn(`${modelName} attempt ${attempt + 1} 503, retrying...`);
+          continue;
+        }
+        // 404 or other error — move to next model
+        console.warn(`${modelName} failed (${status ?? "unknown"}), trying next...`);
+        break;
+      }
     }
   }
 
