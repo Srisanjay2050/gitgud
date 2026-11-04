@@ -99,13 +99,14 @@ Be mean, be funny, be brief. No markdown headers. No bullet points. Just the roa
     roast = await callGroq(prompt);
     console.log("Roasted with Groq");
   } catch (e) {
-    console.warn("Groq failed, falling back to Gemini:", (e as Error).message);
+    const groqErr = e instanceof Error ? e.message : String(e);
+    console.warn("Groq failed:", groqErr);
     try {
       roast = await callGemini(prompt);
       console.log("Roasted with Gemini");
     } catch (e2) {
-      const msg = e2 instanceof Error ? e2.message : "unknown error";
-      return NextResponse.json({ roast: msg }, { status: 500 });
+      const geminiErr = e2 instanceof Error ? e2.message : String(e2);
+      return NextResponse.json({ roast: `Groq: ${groqErr} | Gemini: ${geminiErr}` }, { status: 500 });
     }
   }
 
