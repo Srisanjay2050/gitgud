@@ -51,7 +51,7 @@ export default function Home() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setRoast("Gemini is getting destroyed by traffic right now. Try again in 10 seconds.");
+        setRoast(`Error: ${data.roast}`);
       } else {
         setRoast(data.roast);
         setRoastId(data.id);
